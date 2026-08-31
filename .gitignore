@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Large dataset files
+*.parquet
+*.pcap
+*.pcapng
+
+# Dataset directories
+data/raw/
+data/intermediate/
+
+# Environment
+.env
