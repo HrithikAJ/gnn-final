@@ -19,8 +19,9 @@ split:
 
 # ── Model ─────────────────────────────────────────────────────────────────────
 model:
-  type: "graphsage"              # GraphSAGE-based architecture
+  type: "graphsage"              # Edge-aware GraphSAGE encoder
   hidden_channels: 64
+  embedding_dim: 64              # Final graph embedding dimension (GNN output contract)
   num_layers: 2
   dropout: 0.3
   pooling: "mean_max"            # mean, max, or mean_max

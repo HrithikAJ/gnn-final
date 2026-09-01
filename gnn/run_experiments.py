@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-PROJECT_ROOT = r"c:\Users\ajhri\OneDrive\Documents\comp_programs\SIH2026"
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 os.chdir(PROJECT_ROOT)
@@ -37,11 +37,11 @@ from gnn.inference.predict import GNNPredictor
 
 def main():
     print("=" * 80)
-    print("GNN CYBER ATTACK RISK FORECASTING — MASTER PIPELINE")
+    print("GNN GRAPH REPRESENTATION ENCODER — MASTER PIPELINE")
     print("=" * 80)
 
     # 1. Load config
-    with open("gnn/configs/gnn.yaml", "r") as f:
+    with open("gnn/configs/gnn.yaml", "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
     device = detect_device()
@@ -125,13 +125,13 @@ def main():
 3. **Are there enough nodes and edges for GNN learning?**
    Yes. Each snapshot contains on average ~18,428 nodes and ~28,348 directed edges, offering rich topology for message passing.
 4. **Is the graph representation stable?**
-   Yes. Across all 561 continuous minute intervals, graph size varies moderately with no zero-flow interruptions.
+   Yes. Across all {len(graphs)} continuous minute intervals, graph size varies moderately with no zero-flow interruptions.
 5. **Are there severe class imbalance problems?**
-   Yes. Only 10 out of 561 windows are positive for upcoming attacks (1.78% positive rate). Loss functions require explicit `pos_weight` class balancing.
+   Yes. Only {len(attack_rows)} out of {len(graphs)} windows are positive for upcoming attacks ({100*len(attack_rows)/len(graphs):.2f}% positive rate). Loss functions require explicit `pos_weight` class balancing.
 6. **Are some features proxies for traffic volume?**
    Yes. Node count, edge count, and packet totals correlate with volume. However, degree distributions, port fan-outs, and ratio features capture relational topology independent of raw volume.
 """
-    with open("gnn/GRAPH_DATASET_REPORT.md", "w") as f:
+    with open("gnn/GRAPH_DATASET_REPORT.md", "w", encoding="utf-8") as f:
         f.write(report_dataset)
     print("Saved gnn/GRAPH_DATASET_REPORT.md")
 
@@ -170,12 +170,12 @@ def main():
 - Random Forest and Gradient Boosting exploit non-linear combinations of degree distributions and port statistics.
 - The baseline provides a mandatory benchmark for evaluating the GraphSAGE GNN.
 """
-    with open("gnn/GNN_BASELINE_COMPARISON.md", "w") as f:
+    with open("gnn/GNN_BASELINE_COMPARISON.md", "w", encoding="utf-8") as f:
         f.write(report_baseline)
     print("Saved gnn/GNN_BASELINE_COMPARISON.md")
 
-    # 7. Train GNN Model (Gate 6 & 7)
-    print("\n[Step 6] Training GraphSAGE GNN (Single Snapshot)...")
+    # 7. Train GNN Model (Gate 6 & 7) — Edge-Aware GraphSAGE
+    print("\n[Step 6] Training Edge-Aware GraphSAGE GNN (Single Snapshot)...")
     gnn_out = train_gnn(graphs, splits, config, device=device, feature_mode="all")
     print(f"GNN Test Metrics: {gnn_out['test_metrics']}")
 
@@ -189,7 +189,7 @@ def main():
     print("  -> Ablation 1: Structure Only")
     ablation_struct = train_gnn(graphs, splits, config, device=device, feature_mode="structure_only")
 
-    print("  -> Ablation 2: Node Features Only")
+    print("  -> Ablation 2: Node Features Only (no edge features)")
     ablation_node = train_gnn(graphs, splits, config, device=device, feature_mode="node_only")
 
     print("  -> Ablation 3: Node + Edge Features (Full)")
@@ -208,59 +208,79 @@ def main():
 | Model | Precision | Recall | F1 | PR-AUC | ROC-AUC | FPR | Lead Time (min) |
 |---|---|---|---|---|---|---|---|
 | Baseline ({best_base_name}) | {best_base_m['precision']:.4f} | {best_base_m['recall']:.4f} | {best_base_m['f1']:.4f} | {best_base_m['pr_auc']:.4f} | {best_base_m['roc_auc']:.4f} | {best_base_m['fpr']:.4f} | 0.0 |
-| GraphSAGE GNN (Snapshot) | {gnn_m['precision']:.4f} | {gnn_m['recall']:.4f} | {gnn_m['f1']:.4f} | {gnn_m['pr_auc']:.4f} | {gnn_m['roc_auc']:.4f} | {gnn_m['fpr']:.4f} | 0.0 |
+| Edge-Aware GraphSAGE (Snapshot) | {gnn_m['precision']:.4f} | {gnn_m['recall']:.4f} | {gnn_m['f1']:.4f} | {gnn_m['pr_auc']:.4f} | {gnn_m['roc_auc']:.4f} | {gnn_m['fpr']:.4f} | 0.0 |
 | Temporal GNN Forecaster | {temp_m['precision']:.4f} | {temp_m['recall']:.4f} | {temp_m['f1']:.4f} | {temp_m['pr_auc']:.4f} | {temp_m['roc_auc']:.4f} | {temp_m['fpr']:.4f} | {temporal_out['lead_time_min']:.1f} |
 
+## Model Architecture
+- **Graph Encoder**: EdgeAwareSAGEConv (edge features contribute to message passing via edge MLP)
+- **Node Features**: {len(NODE_FEATURE_NAMES)} features ({', '.join(NODE_FEATURE_NAMES[:4])}...)
+- **Edge Features**: {len(EDGE_FEATURE_NAMES)} features ({', '.join(EDGE_FEATURE_NAMES[:4])}...)
+- **Pooling**: Global Mean + Max → Concatenation → {config.get('model', {}).get('embedding_dim', 64)}-D embedding
+- **Diagnostic**: Snapshot classifier head used for training signal only — primary output is the graph embedding
+
 ## Interpretation
-- **Single-Snapshot GNN**: Encodes topological structural context via neighborhood aggregation (GraphSAGE).
+- **Edge-Aware GraphSAGE**: Encodes topological structural context + edge-level flow information via neighborhood aggregation.
 - **Temporal GNN Forecaster**: Aggregates sequences of {config['data']['sequence_window']} historical graph embeddings to forecast risk over a {config['data']['forecast_horizon_sec']/60:.0f}-minute horizon.
 - **Forecast Lead Time**: Produces advance warning alerts with up to {temporal_out['lead_time_min']:.1f} minutes of lead time before attack onset.
 """
-    with open("gnn/GNN_EVALUATION_REPORT.md", "w") as f:
+    with open("gnn/GNN_EVALUATION_REPORT.md", "w", encoding="utf-8") as f:
         f.write(report_eval)
     print("Saved gnn/GNN_EVALUATION_REPORT.md")
 
     report_ablation = f"""# GNN Ablation Report
 
 ## Objective
-Evaluate the contribution of Graph Structure, Node Attributes, and Edge Attributes to cyber attack risk forecasting performance.
+Evaluate the contribution of Graph Structure, Node Attributes, and Edge Attributes to graph representation quality.
 
 ## Ablation Comparison Table
 
-| Configuration | PR-AUC | F1 | Recall | Precision | ROC-AUC |
-|---|---|---|---|---|---|
-| Graph Structure Only | {ablation_struct['test_metrics']['pr_auc']:.4f} | {ablation_struct['test_metrics']['f1']:.4f} | {ablation_struct['test_metrics']['recall']:.4f} | {ablation_struct['test_metrics']['precision']:.4f} | {ablation_struct['test_metrics']['roc_auc']:.4f} |
-| Node Features Only | {ablation_node['test_metrics']['pr_auc']:.4f} | {ablation_node['test_metrics']['f1']:.4f} | {ablation_node['test_metrics']['recall']:.4f} | {ablation_node['test_metrics']['precision']:.4f} | {ablation_node['test_metrics']['roc_auc']:.4f} |
-| Node + Edge Features (Full) | {ablation_full['test_metrics']['pr_auc']:.4f} | {ablation_full['test_metrics']['f1']:.4f} | {ablation_full['test_metrics']['recall']:.4f} | {ablation_full['test_metrics']['precision']:.4f} | {ablation_full['test_metrics']['roc_auc']:.4f} |
+| Configuration | Edge Features Used | PR-AUC | F1 | Recall | Precision | ROC-AUC |
+|---|---|---|---|---|---|---|
+| Graph Structure Only | No | {ablation_struct['test_metrics']['pr_auc']:.4f} | {ablation_struct['test_metrics']['f1']:.4f} | {ablation_struct['test_metrics']['recall']:.4f} | {ablation_struct['test_metrics']['precision']:.4f} | {ablation_struct['test_metrics']['roc_auc']:.4f} |
+| Node Features Only | No | {ablation_node['test_metrics']['pr_auc']:.4f} | {ablation_node['test_metrics']['f1']:.4f} | {ablation_node['test_metrics']['recall']:.4f} | {ablation_node['test_metrics']['precision']:.4f} | {ablation_node['test_metrics']['roc_auc']:.4f} |
+| Node + Edge Features (Full) | Yes | {ablation_full['test_metrics']['pr_auc']:.4f} | {ablation_full['test_metrics']['f1']:.4f} | {ablation_full['test_metrics']['recall']:.4f} | {ablation_full['test_metrics']['precision']:.4f} | {ablation_full['test_metrics']['roc_auc']:.4f} |
 
 ## Key Findings
 1. **Structure vs Node Features**: Node features (degree, port distribution, traffic volume) provide significant discriminative capacity.
-2. **Edge Features**: Edge-level flow attributes enhance connection granularity between active host pairs.
+2. **Edge Features**: Edge-level flow attributes (flow_count, total_bytes, tcp_ratio etc.) now contribute to message passing via EdgeAwareSAGEConv, enabling the model to capture communication characteristics at the connection level.
+3. **Architecture**: The EdgeAwareSAGEConv concatenates edge features with source node features before aggregation, making edge information a first-class citizen in the GNN computation.
 """
-    with open("gnn/GNN_ABLATION_REPORT.md", "w") as f:
+    with open("gnn/GNN_ABLATION_REPORT.md", "w", encoding="utf-8") as f:
         f.write(report_ablation)
     print("Saved gnn/GNN_ABLATION_REPORT.md")
 
-    # 11. Save Best Model Checkpoint (Gate 10)
+    # 11. Save Best Model Checkpoint (Gate 10) — with full metadata per spec §34
     os.makedirs(config["paths"]["checkpoint_dir"], exist_ok=True)
     best_checkpoint_path = os.path.join(config["paths"]["checkpoint_dir"], "best_gnn.pt")
 
+    embedding_dim = config.get("model", {}).get("embedding_dim", 64)
     checkpoint_data = {
         "state_dict": gnn_out["model"].state_dict(),
         "model_config": {
-            "in_channels": gnn_out["in_channels"],
-            "hidden_channels": config["model"]["hidden_channels"],
+            "node_feature_dim": gnn_out["node_feature_dim"],
+            "edge_feature_dim": gnn_out["edge_feature_dim"],
+            "hidden_dim": config["model"]["hidden_channels"],
+            "embedding_dim": embedding_dim,
             "num_layers": config["model"]["num_layers"],
             "dropout": config["model"]["dropout"],
             "pooling": config["model"]["pooling"],
+            # Backward compat keys
+            "in_channels": gnn_out["node_feature_dim"],
+            "hidden_channels": config["model"]["hidden_channels"],
         },
         "is_temporal": False,
         "metadata": {
+            "ucs_version": "UCS_V1",
+            "feature_version": "GRAPH_V2_EDGE_AWARE",
+            "model_name": "EdgeAwareSAGEConv + GraphEncoder",
+            "embedding_dim": embedding_dim,
+            "node_feature_dim": gnn_out["node_feature_dim"],
+            "edge_feature_dim": gnn_out["edge_feature_dim"],
+            "node_feature_ordering": NODE_FEATURE_NAMES,
+            "edge_feature_ordering": EDGE_FEATURE_NAMES,
             "dataset": "UGR16",
-            "feature_version": "v1",
-            "model_version": "1.0.0",
-            "node_features": NODE_FEATURE_NAMES,
-            "edge_features": EDGE_FEATURE_NAMES,
+            "training_dataset_id": "UGR16:august_week5",
+            "model_version": "2.0.0",
             "pos_weight": gnn_out["pos_weight"],
             "best_epoch": gnn_out["best_epoch"],
             "test_metrics": gnn_out["test_metrics"],
@@ -275,19 +295,30 @@ Evaluate the contribution of Graph Structure, Node Attributes, and Edge Attribut
     temporal_checkpoint_data = {
         "state_dict": temporal_out["model"].state_dict(),
         "model_config": {
-            "in_channels": gnn_out["in_channels"],
-            "hidden_channels": config["model"]["hidden_channels"],
+            "node_feature_dim": gnn_out["node_feature_dim"],
+            "edge_feature_dim": gnn_out["edge_feature_dim"],
+            "hidden_dim": config["model"]["hidden_channels"],
+            "embedding_dim": embedding_dim,
             "num_layers": config["model"]["num_layers"],
             "dropout": config["model"]["dropout"],
             "pooling": config["model"]["pooling"],
             "temporal_method": config["model"]["temporal_method"],
+            # Backward compat keys
+            "in_channels": gnn_out["node_feature_dim"],
+            "hidden_channels": config["model"]["hidden_channels"],
         },
         "is_temporal": True,
         "metadata": {
+            "ucs_version": "UCS_V1",
+            "feature_version": "GRAPH_V2_EDGE_AWARE",
+            "model_name": "TemporalAttackGNN (Experimental)",
+            "embedding_dim": embedding_dim,
+            "node_feature_dim": gnn_out["node_feature_dim"],
+            "edge_feature_dim": gnn_out["edge_feature_dim"],
             "dataset": "UGR16",
             "sequence_window": config["data"]["sequence_window"],
             "forecast_horizon_sec": config["data"]["forecast_horizon_sec"],
-            "model_version": "1.0.0",
+            "model_version": "2.0.0",
             "lead_time_min": temporal_out["lead_time_min"],
             "test_metrics": temporal_out["test_metrics"],
         }
@@ -301,6 +332,18 @@ Evaluate the contribution of Graph Structure, Node Attributes, and Edge Attribut
     sample_res = predictor.predict(graphs[0])
     print("Inference output on sample graph:")
     print(json.dumps(sample_res, indent=2))
+
+    # Verify embedding dimension
+    assert len(sample_res["graph_embedding"]) == embedding_dim, \
+        f"Embedding dim mismatch: {len(sample_res['graph_embedding'])} != {embedding_dim}"
+    print(f"\n[OK] Graph embedding dimension verified: {len(sample_res['graph_embedding'])}")
+
+    # 13. Test explainability
+    print("\n[Step 11] Testing feature ablation explainability...")
+    explanation = predictor.explain_features(graphs[0], top_k=5)
+    print("Top 5 most influential features:")
+    for entry in explanation["top_influential_features"]:
+        print(f"  {entry['feature']}: {entry['importance']}")
 
     print("\n" + "=" * 80)
     print("MASTER EXPERIMENT PIPELINE COMPLETED SUCCESSFULLY!")

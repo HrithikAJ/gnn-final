@@ -1,13 +1,19 @@
 """
-Inference module for GNN cyber attack risk forecasting.
-Provides a clean, modular API for downstream services (e.g. FastAPI backend, LSTM integration).
+Inference module for GNN graph representation encoder.
 
-Output Schema:
+Primary Output Contract:
 {
-    "risk_score": float,      # 0.0 - 1.0 probability/risk score
-    "prediction": int,        # binary forecast (0 or 1)
-    "embedding": list         # graph-level representation vector
+    "graph_embedding": [...]    # 64-D graph representation vector
 }
+
+Optional diagnostic output (if classifier head exists):
+{
+    "graph_embedding": [...],
+    "snapshot_risk": float      # diagnostic P(attack) — NOT the World Model's final output
+}
+
+The graph_embedding is the GNN component's key deliverable for downstream
+Fusion with LSTM temporal embeddings in the World Model pipeline.
 """
 import os
 import sys
@@ -24,14 +30,20 @@ import numpy as np
 import torch
 from torch_geometric.data import Data, Batch
 
-from gnn.models.gnn import AttackRiskGNN, TemporalAttackGNN
+from gnn.models.graphsage import GraphEncoder, SnapshotGNN, TemporalAttackGNN
 from gnn.graph_builder import NODE_FEATURE_NAMES, EDGE_FEATURE_NAMES
 
 
 class GNNPredictor:
     """
-    Production inference class for the GNN Attack Risk Forecasting model.
-    Loads model checkpoint and executes deterministic forward pass without modifying weights.
+    Production inference class for the GNN Graph Representation Encoder.
+
+    Primary interface:
+        result = predictor.predict(graph)
+        graph_embedding = result["graph_embedding"]  # 64-D list
+
+    The predictor loads a trained checkpoint and produces deterministic
+    graph embeddings for downstream consumption by the Fusion/LSTM system.
     """
 
     def __init__(self, checkpoint_path: str, device: str = "auto", threshold: float = 0.5):
@@ -39,7 +51,7 @@ class GNNPredictor:
         Args:
             checkpoint_path: Path to .pt checkpoint file containing state_dict + metadata
             device: 'cuda', 'cpu', or 'auto'
-            threshold: Decision threshold for binary prediction (default: 0.5)
+            threshold: Decision threshold for optional diagnostic prediction (default: 0.5)
         """
         if device == "auto":
             self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -53,8 +65,13 @@ class GNNPredictor:
         self.model_config = self.checkpoint.get("model_config", {})
         self.is_temporal = self.checkpoint.get("is_temporal", False)
 
-        in_channels = self.model_config.get("in_channels", len(NODE_FEATURE_NAMES))
-        hidden_channels = self.model_config.get("hidden_channels", 64)
+        # Extract dimensions from checkpoint metadata
+        node_feature_dim = self.model_config.get("node_feature_dim",
+                            self.model_config.get("in_channels", len(NODE_FEATURE_NAMES)))
+        edge_feature_dim = self.model_config.get("edge_feature_dim", len(EDGE_FEATURE_NAMES))
+        hidden_dim = self.model_config.get("hidden_dim",
+                      self.model_config.get("hidden_channels", 64))
+        embedding_dim = self.model_config.get("embedding_dim", 64)
         num_layers = self.model_config.get("num_layers", 2)
         dropout = self.model_config.get("dropout", 0.3)
         pooling = self.model_config.get("pooling", "mean_max")
@@ -62,17 +79,21 @@ class GNNPredictor:
         if self.is_temporal:
             temporal_method = self.model_config.get("temporal_method", "mean")
             self.model = TemporalAttackGNN(
-                in_channels=in_channels,
-                hidden_channels=hidden_channels,
+                node_feature_dim=node_feature_dim,
+                edge_feature_dim=edge_feature_dim,
+                hidden_dim=hidden_dim,
+                embedding_dim=embedding_dim,
                 num_layers=num_layers,
                 dropout=dropout,
                 pooling=pooling,
                 temporal_method=temporal_method,
             )
         else:
-            self.model = AttackRiskGNN(
-                in_channels=in_channels,
-                hidden_channels=hidden_channels,
+            self.model = SnapshotGNN(
+                node_feature_dim=node_feature_dim,
+                edge_feature_dim=edge_feature_dim,
+                hidden_dim=hidden_dim,
+                embedding_dim=embedding_dim,
                 num_layers=num_layers,
                 dropout=dropout,
                 pooling=pooling,
@@ -81,6 +102,8 @@ class GNNPredictor:
         self.model.load_state_dict(self.checkpoint["state_dict"])
         self.model.to(self.device)
         self.model.eval()
+
+        self.embedding_dim = embedding_dim
 
     @torch.no_grad()
     def predict(self, graph_input: Union[Data, List[Data]]) -> Dict[str, Any]:
@@ -91,11 +114,11 @@ class GNNPredictor:
             graph_input: Single PyG Data object or List of PyG Data objects
 
         Returns:
-            Dict conforming to the specified output schema:
+            Dict with primary output:
             {
-                "risk_score": float,
-                "prediction": int,
-                "embedding": List[float]
+                "graph_embedding": List[float],       # embedding_dim-D representation
+                "snapshot_risk": float (optional),     # diagnostic P(attack)
+                "prediction": int (optional),          # diagnostic binary (0/1)
             }
         """
         if isinstance(graph_input, list):
@@ -109,10 +132,9 @@ class GNNPredictor:
                 if not isinstance(emb_list, list):
                     emb_list = [emb_list]
             else:
-                # Evaluate on the latest graph in sequence
+                # Use encoder on the latest graph in sequence
                 latest_graph = graph_input[-1].to(self.device)
-                batch_vec = torch.zeros(latest_graph.num_nodes, dtype=torch.long, device=self.device)
-                emb = self.model.get_graph_embedding(latest_graph.x, latest_graph.edge_index, batch_vec)
+                emb = self.model.encoder.encode_single(latest_graph)
                 logits = self.model.classifier(emb)
                 risk_score = float(torch.sigmoid(logits).item())
                 emb_list = emb.cpu().squeeze().tolist()
@@ -121,7 +143,6 @@ class GNNPredictor:
         else:
             # Single graph
             single_graph = graph_input.to(self.device)
-            batch_vec = torch.zeros(single_graph.num_nodes, dtype=torch.long, device=self.device)
             if self.is_temporal:
                 seq_device = [single_graph]
                 temporal_emb = self.model.get_sequence_embedding(seq_device)
@@ -131,7 +152,7 @@ class GNNPredictor:
                 if not isinstance(emb_list, list):
                     emb_list = [emb_list]
             else:
-                emb = self.model.get_graph_embedding(single_graph.x, single_graph.edge_index, batch_vec)
+                emb = self.model.encoder.encode_single(single_graph)
                 logits = self.model.classifier(emb)
                 risk_score = float(torch.sigmoid(logits).item())
                 emb_list = emb.cpu().squeeze().tolist()
@@ -141,18 +162,88 @@ class GNNPredictor:
         prediction = 1 if risk_score >= self.threshold else 0
 
         return {
-            "risk_score": float(np.round(risk_score, 6)),
+            "graph_embedding": [float(np.round(v, 6)) for v in emb_list],
+            "snapshot_risk": float(np.round(risk_score, 6)),
             "prediction": int(prediction),
-            "embedding": [float(np.round(v, 6)) for v in emb_list],
+        }
+
+    @torch.no_grad()
+    def get_embedding(self, graph_input: Union[Data, List[Data]]) -> np.ndarray:
+        """
+        Convenience method: get just the graph embedding as a numpy array.
+
+        Args:
+            graph_input: Single PyG Data object
+
+        Returns:
+            numpy array of shape [embedding_dim]
+        """
+        result = self.predict(graph_input)
+        return np.array(result["graph_embedding"], dtype=np.float32)
+
+    @torch.no_grad()
+    def explain_features(self, graph_input: Data, top_k: int = 5) -> Dict[str, Any]:
+        """
+        Feature ablation explainability (MVP approach per spec §28).
+
+        Computes the embedding change when each node/edge feature is zeroed out.
+        Features that cause the largest embedding shift are most influential.
+
+        Args:
+            graph_input: Single PyG Data object
+            top_k: Number of top influential features to return
+
+        Returns:
+            Dict with feature importance rankings
+        """
+        single_graph = graph_input.to(self.device)
+
+        # Baseline embedding
+        baseline_emb = self.model.encoder.encode_single(single_graph).cpu().squeeze()
+
+        # Node feature ablation
+        node_importances = {}
+        for i, name in enumerate(NODE_FEATURE_NAMES):
+            ablated = single_graph.clone()
+            ablated.x = ablated.x.clone()
+            ablated.x[:, i] = 0.0
+            ablated_emb = self.model.encoder.encode_single(ablated).cpu().squeeze()
+            shift = float(torch.norm(baseline_emb - ablated_emb).item())
+            node_importances[name] = shift
+
+        # Edge feature ablation
+        edge_importances = {}
+        if single_graph.edge_attr is not None and single_graph.edge_attr.shape[1] > 0:
+            for i, name in enumerate(EDGE_FEATURE_NAMES):
+                if i < single_graph.edge_attr.shape[1]:
+                    ablated = single_graph.clone()
+                    ablated.edge_attr = ablated.edge_attr.clone()
+                    ablated.edge_attr[:, i] = 0.0
+                    ablated_emb = self.model.encoder.encode_single(ablated).cpu().squeeze()
+                    shift = float(torch.norm(baseline_emb - ablated_emb).item())
+                    edge_importances[name] = shift
+
+        # Rank and select top-k
+        all_importances = {f"node:{k}": v for k, v in node_importances.items()}
+        all_importances.update({f"edge:{k}": v for k, v in edge_importances.items()})
+
+        sorted_features = sorted(all_importances.items(), key=lambda x: x[1], reverse=True)
+        top_features = sorted_features[:top_k]
+
+        return {
+            "top_influential_features": [{"feature": f, "importance": round(v, 6)} for f, v in top_features],
+            "node_feature_importances": {k: round(v, 6) for k, v in node_importances.items()},
+            "edge_feature_importances": {k: round(v, 6) for k, v in edge_importances.items()},
         }
 
 
 def run_cli():
     """Command-line inference entry point."""
-    parser = argparse.ArgumentParser(description="GNN Cyber Attack Risk Predictor")
+    parser = argparse.ArgumentParser(description="GNN Graph Representation Encoder — Inference")
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to best_gnn.pt checkpoint")
     parser.add_argument("--device", type=str, default="auto", help="Compute device (cuda, cpu, auto)")
-    parser.add_argument("--threshold", type=float, default=0.5, help="Decision threshold")
+    parser.add_argument("--threshold", type=float, default=0.5, help="Diagnostic decision threshold")
+    parser.add_argument("--explain", action="store_true", help="Run feature ablation explainability")
     args = parser.parse_args()
 
     print(f"Loading checkpoint: {args.checkpoint}")
@@ -169,6 +260,15 @@ def run_cli():
     result = predictor.predict(dummy_data)
     print("\n--- Inference Output ---")
     print(json.dumps(result, indent=2))
+
+    assert len(result["graph_embedding"]) == predictor.embedding_dim, \
+        f"Embedding dim mismatch: {len(result['graph_embedding'])} != {predictor.embedding_dim}"
+    print(f"\n[OK] Graph embedding dimension verified: {len(result['graph_embedding'])}")
+
+    if args.explain:
+        print("\n--- Feature Ablation Explainability ---")
+        explanation = predictor.explain_features(dummy_data, top_k=5)
+        print(json.dumps(explanation, indent=2))
 
 
 if __name__ == "__main__":

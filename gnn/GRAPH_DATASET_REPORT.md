@@ -1,4 +1,4 @@
-# Graph Dataset Validation Report — UGR16
+# Graph Dataset Validation Report â€” UGR16
 
 ## 1. Overview and Summary Statistics
 - **Total Graph Snapshots (1-minute)**: 561
