@@ -3,17 +3,17 @@
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
 
-# Large dataset files
+# Large dataset files and processed graphs cache
 *.parquet
 *.pcap
 *.pcapng
+data/
 
-# Dataset directories
-data/raw/
-data/intermediate/
+# Keep GNN checkpoints
+!gnn/checkpoints/*.pt
 
 # Environment
 .env
-# Old backup file
 validate_flows_OLD_BACKUP.py
