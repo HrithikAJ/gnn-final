@@ -1,4 +1,9 @@
 data:
+  canonical_ucs_dir: "ml2/data/ucs"
+  windows_file: "ml2/data/ucs/ucs_windows.parquet"
+  graph_edges_file: "ml2/data/ucs/ucs_graph_edgelists.parquet"
+  node_lookup_file: "ml2/data/ucs/node_lookup.parquet"
+  scaler_params_file: "ml2/data/ucs/scaler_params.yaml"
   base_path: "E:/SIH 2026 - Unified Cyber State ingestion pipeline/SIH 2026 - Unified Cyber State ingestion pipeline/data/processed/ucs_v1"
 
 graph:
@@ -14,8 +19,10 @@ model:
   pooling: "mean"
 
 splits:
-  mode: "loeo"  # Changed from chronological fractions
-  manifest_path: "ml2/data/ml1_artifacts/corrected_37fold_manifest.json"
+  mode: "chronological"
+  train_frac: 0.70
+  val_frac: 0.15
+  test_frac: 0.15
 
 training:
   lr: 0.001

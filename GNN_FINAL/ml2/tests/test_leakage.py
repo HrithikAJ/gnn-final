@@ -3,6 +3,26 @@ import pandas as pd
 import numpy as np
 import torch
 from ml2.data.graph_builder import build_communication_graph
+from ml2.data.canonical_ucs import load_canonical_ucs
+
+
+def test_canonical_split_is_time_ordered_and_disjoint():
+    """Canonical UCS split labels must prevent cross-partition time leakage."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "data" / "ucs"
+    windows, _, _ = load_canonical_ucs(root)
+    timestamps = {
+        split: windows.loc[windows["split"] == split, "window_start_utc"]
+        for split in ("train", "val", "test")
+    }
+
+    assert timestamps["train"].max() < timestamps["val"].min()
+    assert timestamps["val"].max() < timestamps["test"].min()
+    assert set(timestamps["train"]).isdisjoint(timestamps["val"])
+    assert set(timestamps["val"]).isdisjoint(timestamps["test"])
+    assert set(timestamps["train"]).isdisjoint(timestamps["test"])
+    assert windows["window_start_utc"].is_unique
 
 def test_graph_leakage_constraint():
     """

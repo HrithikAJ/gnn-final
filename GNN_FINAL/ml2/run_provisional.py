@@ -49,8 +49,10 @@ logging.basicConfig(
 logger = logging.getLogger("ml2_runner")
 
 # ─── Constants ───────────────────────────────────────────────────────────────
-EDGELISTS_PATH_ACTUAL = os.path.join(os.path.dirname(__file__), "data", "ucs_graph", "ucs_graph_edgelists.parquet")
-WINDOWS_PATH_ACTUAL = os.path.join(os.path.dirname(__file__), "data", "ucs_graph", "ucs_windows.parquet")
+UCS_DIR = os.path.join(os.path.dirname(__file__), "data", "ucs")
+EDGELISTS_PATH_ACTUAL = os.path.join(UCS_DIR, "ucs_graph_edgelists.parquet")
+WINDOWS_PATH_ACTUAL = os.path.join(UCS_DIR, "ucs_windows.parquet")
+NODE_LOOKUP_PATH_ACTUAL = os.path.join(UCS_DIR, "node_lookup.parquet")
 
 INFILTRATION_DAY = "01-03-2018"
 OUTPUT_DIR = os.path.join(
@@ -387,8 +389,10 @@ def main():
         logger.error(f"Edgelists file not found at {EDGELISTS_PATH_ACTUAL}")
         return
 
-    # Load full edgelists for the LOEO ablation
+    # Load canonical post-purge UCS windows and graph edges.
     full_edges_df = load_edgelists(EDGELISTS_PATH_ACTUAL)
+    canonical_windows = pd.read_parquet(WINDOWS_PATH_ACTUAL)
+    node_lookup = pd.read_parquet(NODE_LOOKUP_PATH_ACTUAL)
     
     if len(full_edges_df) == 0:
         logger.error("No edges found.")
@@ -400,9 +404,11 @@ def main():
     if len(infiltration_edges_df) > 0:
         spotcheck_result = run_lateral_movement_spotcheck(infiltration_edges_df, config)
 
-    # Task 1: LOEO ablation
-    # Build graphs from the full data
-    graphs, window_starts = build_graphs_from_edgelists(full_edges_df)
+    # Task 1: provisional ablation on the canonical UCS window population.
+    from ml2.data.canonical_ucs import build_canonical_graphs, load_canonical_ucs
+    canonical_windows, full_edges_df, node_lookup = load_canonical_ucs(Path(UCS_DIR))
+    graphs = build_canonical_graphs(canonical_windows, full_edges_df, node_lookup)
+    window_starts = [graph.timestamp for graph in graphs]
     
     # Inject ML1 novelty
     from ml2.data.ml1_interface import ML1Adapter
