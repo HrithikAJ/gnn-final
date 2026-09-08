@@ -10,6 +10,7 @@ leakage from the current or future windows.
 import numpy as np
 import os
 import json
+import pandas as pd
 from typing import Dict, Optional, List
 from pathlib import Path
 from torch_geometric.data import Data
@@ -51,16 +52,25 @@ class ML1Adapter:
 
     def _preload(self, output_file: str) -> None:
         """Preload ML1 novelty from CSV."""
-        import pandas as pd
         df = pd.read_csv(output_file)
-        # Ensure timestamp is normalized (e.g. YYYY-MM-DD HH:MM:SS) if needed, 
-        # but window_ids are usually passed as pandas Timestamps.
-        # We will parse CSV timestamps into pd.Timestamp to ensure matching.
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        timestamp_column = (
+            "window_start_utc" if "window_start_utc" in df.columns else "timestamp"
+        )
+        score_column = (
+            "normalized_deviation_score"
+            if "normalized_deviation_score" in df.columns
+            else "deviation_score"
+        )
+        missing = {timestamp_column, score_column} - set(df.columns)
+        if missing:
+            raise ValueError(
+                f"ML1 deviation CSV is missing required columns: {sorted(missing)}"
+            )
+        df["timestamp"] = pd.to_datetime(df[timestamp_column], utc=True)
         
         for _, row in df.iterrows():
             ts = row['timestamp']
-            score = row['deviation_score']
+            score = row[score_column]
             self._cache[str(ts)] = float(score)
             
         logger.info(f"Loaded ML1 novelty from CSV: {len(self._cache)} windows")

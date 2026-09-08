@@ -75,6 +75,12 @@ def main():
     windows["window_start_utc"] = pd.to_datetime(windows["window_start_utc"], utc=True)
     edges["window_start_utc"] = pd.to_datetime(edges["window_start_utc"], utc=True)
     deviation = pd.read_csv(DEVIATION_PATH)
+    if "window_start_utc" in deviation.columns:
+        deviation = deviation.rename(columns={"window_start_utc": "timestamp"})
+    if "normalized_deviation_score" in deviation.columns:
+        deviation = deviation.rename(
+            columns={"normalized_deviation_score": "deviation_score"}
+        )
     deviation["timestamp"] = pd.to_datetime(deviation["timestamp"], utc=True)
 
     print(f"Artifact rows: {len(deviation)}")
@@ -105,14 +111,14 @@ def main():
             f"std={np.std(values):.6g}"
         )
 
-    log_scores = np.log1p(deviation["deviation_score"].to_numpy(dtype=float))
-    median = float(np.median(log_scores))
-    mad = float(np.median(np.abs(log_scores - median)))
+    normalized_scores = deviation["deviation_score"].to_numpy(dtype=float)
+    median = float(np.median(normalized_scores))
+    mad = float(np.median(np.abs(normalized_scores - median)))
     print(
         f"slot10 deviation_score: min={deviation['deviation_score'].min():.6g}, "
         f"median={deviation['deviation_score'].median():.6g}, "
         f"max={deviation['deviation_score'].max():.6g}, "
-        f"log1p_median={median:.6g}, log1p_MAD={mad:.6g}"
+        f"normalized_median={median:.6g}, normalized_MAD={mad:.6g}"
     )
 
 
