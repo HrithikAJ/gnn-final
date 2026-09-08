@@ -21,6 +21,7 @@ from typing import List, Tuple, Dict, Optional
 from torch_geometric.data import Data
 from torch_geometric.nn import global_mean_pool
 from ml2.data.dataset import build_paired_sequences, SnapshotDataset
+from ml2.training.z_encoder import TemporalFeatureStore
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,20 @@ class ML2Trainer:
 
         ml1_cfg = config.get("ml1_interface", {})
         self.z_dim = ml1_cfg.get("z_dim", 64)
+        encoder_cfg = config.get("temporal_encoder", {})
+        project_root = Path(__file__).resolve().parents[1].parent
+
+        def resolve_path(value: str) -> str:
+            path = Path(value)
+            return str(path if path.is_absolute() else project_root / path)
+
+        self.z_store = TemporalFeatureStore(
+            windows_path=resolve_path(encoder_cfg["windows_path"]),
+            metadata_path=resolve_path(encoder_cfg["metadata_path"]),
+            scaler_path=resolve_path(encoder_cfg["scaler_path"]),
+            checkpoint_path=resolve_path(encoder_cfg["checkpoint_path"]),
+            device=self.device,
+        )
 
         self.optimizer = optim.AdamW(self.model.parameters(), lr=self.lr, weight_decay=1e-4)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -86,6 +101,10 @@ class ML2Trainer:
         target = global_mean_pool(graph.x, batch)
         return target
 
+    def _get_z(self, graph: Data) -> torch.Tensor:
+        """Return the real ML1-derived z(t), never a zero placeholder."""
+        return self.z_store.get(graph.timestamp)
+
     def _train_epoch(self, pairs: List[Tuple[Data, Data]]) -> float:
         """Run one training epoch over (graph_t, graph_{t+1}) pairs."""
         self.model.train()
@@ -96,7 +115,7 @@ class ML2Trainer:
             graph_tp1 = graph_tp1.to(self.device)
 
             batch_t = torch.zeros(graph_t.x.size(0), dtype=torch.long, device=self.device)
-            z_t = torch.zeros(1, self.z_dim, device=self.device)
+            z_t = self._get_z(graph_t)
 
             # Forward
             pred = self.model(graph_t.x, graph_t.edge_index, z_t, batch_t)
@@ -132,7 +151,7 @@ class ML2Trainer:
             graph_tp1 = graph_tp1.to(self.device)
 
             batch_t = torch.zeros(graph_t.x.size(0), dtype=torch.long, device=self.device)
-            z_t = torch.zeros(1, self.z_dim, device=self.device)
+            z_t = self._get_z(graph_t)
 
             pred = self.model(graph_t.x, graph_t.edge_index, z_t, batch_t)
             target = self._get_target_embedding(graph_tp1)

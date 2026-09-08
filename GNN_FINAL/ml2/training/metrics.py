@@ -15,6 +15,7 @@ from typing import List, Dict, Tuple, Optional
 from torch_geometric.data import Data
 from torch_geometric.nn import global_mean_pool
 from torch_geometric.loader import DataLoader
+from ml2.training.z_encoder import TemporalFeatureStore
 
 
 @torch.no_grad()
@@ -23,6 +24,7 @@ def next_state_error(
     pairs: List[Tuple[Data, Data]],
     z_dim: int = 64,
     device: str = "cpu",
+    z_store: Optional[TemporalFeatureStore] = None,
 ) -> float:
     """
     Computes 1-step next-state prediction MSE.
@@ -53,8 +55,7 @@ def next_state_error(
         graph_t = graph_t.to(device)
         graph_tp1 = graph_tp1.to(device)
 
-        # Mock z_t (in real pipeline, comes from ML1)
-        z_t = torch.zeros(1, z_dim, device=device)
+        z_t = z_store.get(graph_t.timestamp) if z_store is not None else torch.zeros(1, z_dim, device=device)
 
         # Prediction
         batch_t = torch.zeros(graph_t.x.size(0), dtype=torch.long, device=device)
@@ -78,6 +79,7 @@ def rollout_error(
     K: int,
     z_dim: int = 64,
     device: str = "cpu",
+    z_store: Optional[TemporalFeatureStore] = None,
 ) -> Dict[str, float]:
     """
     Computes K-step autoregressive rollout error.
@@ -125,7 +127,7 @@ def rollout_error(
     for start_idx in range(len(graphs) - K):
         graph_t = graphs[start_idx].to(device)
         batch_t = torch.zeros(graph_t.x.size(0), dtype=torch.long, device=device)
-        z_t = torch.zeros(1, z_dim, device=device)
+        z_t = z_store.get(graph_t.timestamp) if z_store is not None else torch.zeros(1, z_dim, device=device)
 
         # Initial prediction (step 1)
         current_pred = model(graph_t.x, graph_t.edge_index, z_t, batch_t)
@@ -165,6 +167,7 @@ def compute_all_rollout_errors(
     K_values: List[int] = None,
     z_dim: int = 64,
     device: str = "cpu",
+    z_store: Optional[TemporalFeatureStore] = None,
 ) -> Dict[int, Dict[str, float]]:
     """
     Computes rollout error for multiple values of K.
@@ -191,6 +194,6 @@ def compute_all_rollout_errors(
                 "mean_mse": float("nan"),
             }
         else:
-            results[K] = rollout_error(model, graphs, K, z_dim, device)
+            results[K] = rollout_error(model, graphs, K, z_dim, device, z_store)
 
     return results

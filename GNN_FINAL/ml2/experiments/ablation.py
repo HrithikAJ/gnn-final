@@ -147,12 +147,23 @@ def run_ablation(
 
         # Evaluate: next-state error
         test_pairs = build_paired_sequences(test_ds)
-        nse = next_state_error(model, test_pairs, z_dim=z_dim, device=device)
+        nse = next_state_error(
+            model,
+            test_pairs,
+            z_dim=z_dim,
+            device=device,
+            z_store=trainer.z_store,
+        )
 
         # Evaluate: rollout error vs K
         test_graphs = [test_ds[i] for i in range(len(test_ds))]
         rollout_results = compute_all_rollout_errors(
-            model, test_graphs, K_values=K_values, z_dim=z_dim, device=device
+            model,
+            test_graphs,
+            K_values=K_values,
+            z_dim=z_dim,
+            device=device,
+            z_store=trainer.z_store,
         )
 
         results[model_type] = {

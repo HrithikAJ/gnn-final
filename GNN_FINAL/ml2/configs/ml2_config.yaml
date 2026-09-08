@@ -35,6 +35,12 @@ ml1_interface:
   z_dim: 64
   output_dir: "ml2/data/ml1_artifacts/deviation_predictions.csv"  # Now a specific CSV instead of dir
 
+temporal_encoder:
+  windows_path: "ml2/data/ucs/ucs_windows.parquet"
+  metadata_path: "ml2/data/ml1_artifacts/reproducibility_metadata.json"
+  scaler_path: "ml2/data/ucs/scaler_params.yaml"
+  checkpoint_path: "ml2/data/ml1_artifacts/gaussian_next_state_best.pt"
+
 ablation:
   model_types: ["fused", "temporal_only"]
   K_values: [1, 2, 3, 5, 10]
