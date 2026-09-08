@@ -109,6 +109,12 @@ def run_ablation(
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
 
+    # ML1 z(t) requires the preceding 30 canonical windows. The first 29
+    # windows are a causal warm-up period and cannot be evaluated honestly.
+    if len(graphs) <= 30:
+        raise ValueError("Ablation requires more than 30 chronological graphs")
+    graphs = graphs[29:]
+
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
 
