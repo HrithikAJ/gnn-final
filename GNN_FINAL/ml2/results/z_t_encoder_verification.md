@@ -36,3 +36,17 @@ First eight values of the first verified z(t):
 
 The checkpoint loaded completely and the outputs vary across input windows, so
 this gate passes. No zero-latent fallback is used by the encoder.
+
+## Item 2: Canonical UCS Normalization Verification
+
+Confirmed: `ucs_windows.parquet` is already normalized. Verification run 2026-09-09:
+
+| Feature | Parquet Min | Parquet Max | Parquet Mean | Scaler Median (Raw) | is_log1p | Status |
+|---------|-------------|-------------|--------------|---------------------|----------|--------|
+| duration_microsec_mean | -2.069 | 14.518 | 0.293 | 14,770,387 | false | ✓ scaled |
+| byte_count_fwd_mean | -16.945 | 26.194 | 0.518 | 5.99 | true | ✓ scaled |
+| packet_count_fwd_mean | -4.519 | 38.793 | 0.701 | 1.85 | true | ✓ scaled |
+
+**Conclusion:** All features show 0-centered scaled values (mean ≈ 0, std ≈ 2–4), while scaler parameters reflect raw data statistics. 
+The z_encoder.py implementation is correct: **no additional normalization is applied** to the input features before LSTM.
+The assumption that `ucs_windows.parquet` is already normalized is **verified and safe**.
