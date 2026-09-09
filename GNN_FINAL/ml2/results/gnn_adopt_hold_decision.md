@@ -1,6 +1,6 @@
 # GNN Adopt/Hold Decision
 
-## Decision: ADOPTED
+## Decision: HOLD
 
 **Date:** 2026-09-09  
 **Protocol:** Chronological ML1→ML2 UCS contract  
@@ -12,77 +12,61 @@
 
 ## Executive Summary
 
-The **Fused Model is adopted as the primary dynamics predictor** over TemporalOnly baseline. 
-Fused shows consistent improvements across all rollout horizons (K=1,2,3) using **real z(t) 
-temporal embeddings** extracted directly from ML1's LSTM checkpoint.
+The **Fused Model is HELD BACK** in favor of the TemporalOnly baseline. 
+A rigorous multi-seed re-evaluation (3 seeds) reveals that while the Fused model achieves a lower `next_state_error` on the holdout test set, the primary metric driving model selection—**Validation Loss**—consistently favors the Temporal-only baseline across all seeds. Adopting the Fused model would mean selecting a model that performs worse on the validation split it was explicitly tuned against.
 
-### Key Metrics (Next-State MSE)
+### 1. Target Normalization Fix
+During re-evaluation, a significant evaluation bug was identified and fixed: while models were trained on normalized features (targets std ≈ 0.03), the original evaluation script failed to apply the `NodeFeatureScaler` to the test dataset. This caused the model to be evaluated on unnormalized test inputs against unnormalized test targets, leading to the millions-scale MSE values (e.g., ~2.5 million) seen in earlier reports. With the test set properly scaled, `next_state_error` values are now correctly scaled (< 3.0).
 
-| Model | K=1 | K=2 | K=3 | Improvement |
-|-------|-----|-----|-----|-------------|
-| Fused | 2,509,479.87 | 2,511,402.91 | 2,512,274.15 | — |
-| Temporal-Only | 2,512,652.33 | 2,513,248.14 | 2,513,491.85 | −0.13% |
+### 2. Training Convergence (Validation Loss)
 
-**Interpretation:** Fused model achieves ~0.13% lower MSE at K=1 (3,172 points) and sustains 
-advantage through K=2 and K=3. Improvement is marginal but **consistent and reproducible** 
-across all horizons.
+Validation loss drove the early stopping criterion (patience=15 epochs for both models) and must be the primary driver of adoption.
 
-### Training Convergence (Validation Loss)
+| Model | Multi-Seed Val Loss (Mean ± Std) | Multi-Seed Stopping Epochs |
+|-------|----------------------------------|----------------------------|
+| Fused | 1.932 ± 0.053 | 33.6 (best ~18.6) |
+| Temporal-Only | 1.666 ± 0.017 | 23.0 (best ~8.0) |
 
-| Model | Epochs | Initial Val Loss | Final Val Loss | Trajectory |
-|-------|--------|------------------|----------------|-----------|
-| Fused | 23 | 2.5424 | 2.0404 | ✓ Converged, no degradation |
-| Temporal-Only | 27 | 2.3986 | 1.9080 | ✓ Converged, no degradation |
+**Interpretation:** Validation loss consistently and reliably favors the Temporal-only baseline across all 3 seeds. The Fused model never outperformed the baseline on the validation set, despite taking longer to trigger early stopping.
 
-Both models show healthy loss curves with early stopping triggered by patience (≤15 epochs 
-without improvement). No evidence of overfitting or numerical instability.
+### 3. Next-State Error (Test Set)
+
+| Model | Multi-Seed Test MSE (Mean ± Std) | Sign Consistency |
+|-------|----------------------------------|------------------|
+| Fused | 0.725 ± 0.084 | Consistent across 3 seeds |
+| Temporal-Only | 2.333 ± 0.129 | Consistent across 3 seeds |
+
+**Reconciliation:** The `next_state_error` on the test set strongly favors the Fused model. However, because the models are evaluated chronologically (Train → Val → Test), the test set likely represents a temporal regime shift (e.g., an infiltration phase) where graph features provide a strong advantage. While this is an interesting finding, we cannot honestly adopt a model that fails validation selection to capitalize on test-set performance, as that constitutes test-set leakage and poor statistical grounding.
 
 ---
 
 ## Adoption Rationale
 
-1. **Improvement is real, not degenerate:**
-   - Fused MSE: 2,509,479.87 (non-zero, non-infinite)
-   - TemporalOnly MSE: 2,512,652.33 (non-zero, non-infinite)
-   - Difference: +3,172.46 MSE in favor of Fused (0.126% gain)
-
-2. **z(t) injection is causal and verified:**
-   - Z_tEncoder loads ML1 checkpoint (gaussian_next_state_best.pt) completely
-   - Temporal embeddings: 2,758 cached, output shape [2758, 64], mean=-0.0799, std=0.544
-   - No zero-padding fallback used; all predictions use real learned representations
-
-3. **Canonical data is properly normalized:**
-   - ucs_windows.parquet verified as pre-scaled (mean ≈ 0, std ≈ 2-4)
-   - Scaler metadata reflects raw data statistics (not applied twice)
-   - No normalization assumption violated
-
-4. **Marginal but consistent advantage:**
-   - Improvement holds across K=1, K=2, K=3
-   - No degradation at longer horizons
-   - Fused model trains faster (23 vs 27 epochs)
+1. **Validation Loss is the Source of Truth:**
+   - The decision must be justified by the metric that actually drove model selection during training. The Temporal-only baseline wins cleanly on Validation Loss: 1.666 vs 1.932.
+2. **Properly Controlled Multi-Seed Comparison:**
+   - Across 3 independent seeds, identical early-stopping criteria (patience=15) were applied. The results are not noise: the direction of both Validation Loss (favoring Temporal) and Test MSE (favoring Fused) was 100% consistent across all seeds.
+3. **Scale Mismatch Resolved:**
+   - The previous "0.13%" gap on millions-scale MSE was a result of unscaled test data. The new metrics reflect the true normalized scale. 
+4. **Honest Evaluation:**
+   - The honest conclusion is to hold back the Fused model. Adopting it would mean knowingly deploying a model that failed its primary validation criteria.
 
 ---
 
 ## Downstream Contract
 
-For downstream models expecting z'(t) outputs from this GNN:
+Because the GNN is held back, downstream models expecting z'(t) outputs must use the fallback wiring.
 
+**Fallback Wiring (Active):**
 ```python
-# Fused model produces embeddings that incorporate z(t) context
-z_prime_t = gnn.forward(graph_t, z_t)
-# z'(t) improves upon temporal-only predictions by ~0.1%
-```
-
-**Fallback** (if Fused GNN is unavailable):
-```python
-z_prime_t = z_t  # Use ML1 embedding directly; no graph fusion
+# The GNN is frozen/held back.
+# Downstream consumers receive the ML1 temporal embedding unmodified.
+z_prime_t = z_t 
 ```
 
 ---
 
 ## Notes
-
-- **Degeneracy check:** ✓ All values non-zero, non-infinite, properly scaled
-- **Loss trajectory:** ✓ Both models converge; Fused reaches target faster
-- **Reproducibility:** ✓ GPU device confirmed; z_store verified; all 2758 embeddings cached
-- **Recommendation:** Adopt Fused for production; log marginal improvement caveat in system docs
+- **Target Normalization:** Fixed. Test datasets are now correctly transformed by the training set's `NodeFeatureScaler`.
+- **Early Stopping:** Controlled. Both models explicitly evaluated with `patience=15` across 3 seeds.
+- **Reporting Discipline:** All reported values are multi-seed (mean ± std) rather than single-run point estimates.
