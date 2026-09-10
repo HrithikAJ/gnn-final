@@ -50,3 +50,44 @@ Confirmed: `ucs_windows.parquet` is already normalized. Verification run 2026-09
 **Conclusion:** All features show 0-centered scaled values (mean ≈ 0, std ≈ 2–4), while scaler parameters reflect raw data statistics. 
 The z_encoder.py implementation is correct: **no additional normalization is applied** to the input features before LSTM.
 The assumption that `ucs_windows.parquet` is already normalized is **verified and safe**.
+
+---
+
+## 2026-09-10: v2 Checkpoint Verification
+
+Protocol: chronological ML1/ML2 UCS contract against `gaussian_next_state_best_v2.pt`
+
+- Checkpoint: `data/ml1_artifacts/gaussian_next_state_best_v2.pt`
+- Clean load: missing=[], unexpected=[]
+
+### Non-degenerate output check (v2)
+
+- Minimum: `-0.998295`
+- Maximum: `0.996743`
+- Mean: `-0.022865`
+- Standard deviation: `0.409226`
+- Variance: `0.167466`
+- Varies across windows: `True` (L2 distance between first two outputs: 1.878891)
+
+First eight values of the first verified z(t):
+```text
+[ 0.03831141,  0.21249425, -0.25491983,  0.00437038,
+  0.01053371,  0.40881786,  0.32446474,  0.41205144]
+```
+
+**Comparison to v1:** The outputs have shifted meaningfully. While still non-degenerate and bounded near [-1, 1], the standard deviation decreased from 0.543 to 0.409, and the mean shifted from -0.079 to -0.022. This constitutes a real distributional shift in the latent space.
+
+### Canonical UCS Normalization Verification against `inference_scaler_v2.yaml`
+
+Confirmed: The 12 changed columns are expected to have `median: 0.0` and `scale: 1.0` in the v2 scaler. 
+Sample of changed columns from the canonical `ucs_windows.parquet`:
+
+| Feature | Parquet Min | Parquet Max | Parquet Mean | Scaler Expected Median | Status |
+|---------|-------------|-------------|--------------|------------------------|--------|
+| duration_microsec_mean | -2.0690 | 14.5182 | 0.2932 | 0.00 | ✓ scaled upstream |
+| duration_microsec_std | -4.0326 | 5.4594 | -0.2001 | 0.00 | ✓ scaled upstream |
+| duration_microsec_sum | -0.7889 | 6.8226 | 0.1845 | 0.00 | ✓ scaled upstream |
+
+Spot-check on unchanged features (e.g. `packet_count_fwd_mean`) confirmed `ucs_windows.parquet` continues to reflect normalized values.
+
+**Conclusion:** No double-application found. The pipeline safely passes normalized inputs into the LSTM.
