@@ -70,3 +70,17 @@ z_prime_t = z_t
 - **Target Normalization:** Fixed. Test datasets are now correctly transformed by the training set's `NodeFeatureScaler`.
 - **Early Stopping:** Controlled. Both models explicitly evaluated with `patience=15` across 3 seeds.
 - **Reporting Discipline:** All reported values are multi-seed (mean ± std) rather than single-run point estimates.
+
+---
+
+## 2026-09-10 Addendum: v2 Checkpoint Retrain & Decision
+
+**The team lead has accepted the existing HOLD decision as final, choosing not to re-run the full multi-seed ablation.**
+
+Please note the following regarding the v2 checkpoint update:
+
+1. **Original Evidence Context:** The multi-seed ablation evidence presented above (Validation Loss, Next-State Error) was computed against the **v1 checkpoint** `z(t)` values.
+2. **v2 Retrain Characterization:** The v2 retrain (`gaussian_next_state_best_v2.pt`) was a data correction—specifically, 12 of 406 upstream features were zero-filled to remove a label leak. It was **not** an architecture change to either the FusedModel or the TemporalOnlyBaseline.
+3. **Rationale for Accepting HOLD:** Re-running the ablation is not expected to change the outcome. The original HOLD decision was not a marginal or borderline call: validation loss decisively and consistently favored the Temporal-only baseline across **all 3 seeds** and multiple metrics.
+4. **v2 Verification Results:** The `z(t)` encoder re-verification confirmed that the v2 encoder remains healthy (outputs are non-degenerate and input-sensitive). A distribution shift was noted (standard deviation decreased from 0.543 to 0.409), but this is expected given the data correction and does not bear on the underlying adopt/hold question.
+5. **Reopening Condition:** If there is genuine spare time after the backend's `predict()` build, the demo, and the presentation deck are completely finished, re-running the ablation against the v2 `z(t)` would be a reasonable "nice to have" for full rigor. However, it is explicitly **not required** and should not be prioritized over any remaining critical path items.
